@@ -3,7 +3,9 @@
 **n8n workflow for telecom data-quality validation, historical/predictive network-risk triage, automated review alerts, and resumable batch processing.**
 
 > **Portfolio / demonstration workflow.** The supplied design uses configured JavaScript rules and *pre-existing* predicted-risk probabilities from a tower watchlist. It does not train or invoke a machine-learning model or LLM within n8n, and it does **not** independently verify live outages. Geographic reference mappings are illustrative and should not be treated as authoritative production geocoding.
+## n8n Workflow Architecture
 
+![Telecom AI Workflow Architecture](screenshots/telecom_workflow_overview.png)
 ## Business problem
 
 Telecom operations teams need a repeatable way to identify unreliable or high-risk tower sites, flag inconsistent records, prioritize engineering review, and avoid processing the same source rows repeatedly.
