@@ -1,0 +1,911 @@
+{
+  "name": "Telecom AI - Data Quality & Outage Monitoring (Portfolio Template)",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        -432
+      ],
+      "id": "4af68bb1-ad7e-48c2-b0a4-2cbb96983e99",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_tower_risk_watchlist"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "condition": "gt",
+              "keyValue": "={{ Number($json.last_processed_id ?? 0) }}"
+            }
+          ]
+        },
+        "limit": 100,
+        "orderBy": true,
+        "orderByColumn": "id",
+        "orderByDirection": "ASC"
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        48,
+        -416
+      ],
+      "id": "5ca5312e-0e66-49d5-828c-e495e9aa4a77",
+      "name": "Get row(s)"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\nconst checkedAt = new Date().toISOString();\nconst seenTowers = new Set();\n\nfunction isMissing(value) {\n  return value === null ||\n    value === undefined ||\n    (typeof value === \"string\" && value.trim() === \"\");\n}\n\nfunction checkNumber(row, field, errors, options = {}) {\n  const value = row[field];\n\n  if (isMissing(value)) {\n    errors.push(`${field}: missing value`);\n    return null;\n  }\n\n  const number = (\n    typeof value === \"number\" ||\n    typeof value === \"string\"\n  ) ? Number(value) : NaN;\n\n  if (!Number.isFinite(number)) {\n    errors.push(`${field}: must be a valid number`);\n    return null;\n  }\n\n  if (options.min !== undefined && number < options.min) {\n    errors.push(`${field}: below minimum ${options.min}`);\n  }\n\n  if (options.max !== undefined && number > options.max) {\n    errors.push(`${field}: above maximum ${options.max}`);\n  }\n\n  if (options.integer && !Number.isInteger(number)) {\n    errors.push(`${field}: must be an integer`);\n  }\n\n  return number;\n}\n\nreturn items.map((item) => {\n  const row = item.json;\n  const errors = [];\n  const warnings = [];\n\n  const requiredFields = [\n    \"tower_id\",\n    \"operator\",\n    \"state\",\n    \"city\",\n    \"network_type\",\n    \"data_origin\",\n    \"risk_category_final\",\n    \"predicted_risk_category\"\n  ];\n\n  for (const field of requiredFields) {\n    if (isMissing(row[field])) {\n      errors.push(`${field}: missing value`);\n    }\n  }\n\n  const towerId = String(row.tower_id ?? \"\")\n    .trim()\n    .toUpperCase();\n\n  if (towerId) {\n    if (seenTowers.has(towerId)) {\n      warnings.push(\n        \"Duplicate tower_id within this batch\"\n      );\n    }\n    seenTowers.add(towerId);\n  }\n\n  checkNumber(row, \"id\", errors, {\n    min: 1,\n    integer: true\n  });\n\n  const uptime = checkNumber(\n    row, \"latest_uptime\", errors,\n    { min: 0, max: 100 }\n  );\n\n  checkNumber(\n    row, \"historical_total_downtime_minutes\",\n    errors, { min: 0 }\n  );\n\n  checkNumber(\n    row, \"historical_total_outage_count\",\n    errors, { min: 0, integer: true }\n  );\n\n  checkNumber(\n    row, \"site_reliability_risk_score\",\n    errors, { min: 0 }\n  );\n\n  const probability = checkNumber(\n    row, \"predicted_risk_probability\",\n    errors, { min: 0, max: 1 }\n  );\n\n  checkNumber(\n    row, \"recommended_priority\",\n    errors, { min: 1, integer: true }\n  );\n\n  if (uptime !== null && uptime < 90) {\n    warnings.push(\n      \"Low uptime: requires operational review\"\n    );\n  }\n\n  if (probability !== null && probability >= 0.7) {\n    warnings.push(\n      \"Elevated predicted risk probability\"\n    );\n  }\n\n  \nconst knownCityStates = {\n  \"kano\": [\"kano\"],\n  \"abuja\": [\"fct\", \"federal capital territory\"],\n  \"benin city\": [\"edo\"],\n  \"abeokuta\": [\"ogun\"],\n  \"ibadan\": [\"oyo\"],\n  \"calabar\": [\"cross river\"],\n  \"jos\": [\"plateau\"]\n};\n\n  const city = String(row.city ?? \"\").trim().toLowerCase();\nconst state = String(row.state ?? \"\").trim().toLowerCase();\n\n\n\n  \nif (\n  city &&\n  !Object.prototype.hasOwnProperty.call(knownCityStates, city)\n) {\n  errors.push(\n    `GEOGRAPHY_UNVERIFIED: ${row.city} requires reference verification`\n  );\n}\n\nif (\n  knownCityStates[city] &&\n  !knownCityStates[city].includes(state)\n) {\n  errors.push(\n    `GEOGRAPHIC_MISMATCH: ${row.city} does not belong to ${row.state}`\n  );\n}\n\n  const isValid = errors.length === 0;\n\n  return {\n    json: {\n      ...row,\n      validation_status: isValid\n        ? \"PASSED_VALIDATION\"\n        : \"FAILED_VALIDATION\",\n      is_valid: isValid,\n      validation_errors: errors,\n      validation_warnings: warnings,\n      validation_error_count: errors.length,\n      requires_review:\n        errors.length > 0 || warnings.length > 0,\n      validated_at: checkedAt\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -432
+      ],
+      "id": "78b84152-345a-4db5-981a-5f70dff4ce13",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ab26347e-17d0-4b2c-891d-69abf95c33fc",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        464,
+        -432
+      ],
+      "id": "d63e5c82-297d-489c-b1ea-449e3f4506d3",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_data_quality_issues"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "tower_id",
+              "keyValue": "={{ $json.tower_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "is_test_data": true,
+            "tower_id": "={{ $json.tower_id }}",
+            "validation_status": "={{ $json.validation_status }}",
+            "failure_reason": "={{ $json.validation_errors.join(\"; \") }}",
+            "latest_uptime": "={{ $json.latest_uptime }}",
+            "detected_at": "={{ $json.validated_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tower_id",
+              "displayName": "tower_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "validation_status",
+              "displayName": "validation_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "failure_reason",
+              "displayName": "failure_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "latest_uptime",
+              "displayName": "latest_uptime",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "is_test_data",
+              "displayName": "is_test_data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "detected_at",
+              "displayName": "detected_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        -608
+      ],
+      "id": "70fd0e72-f8e6-4fef-8787-af1e8a30c364",
+      "name": "Upsert row(s)"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\n// Configurable operational risk thresholds\nconst T = {\n  criticalUptime: 90,\n  highUptime: 97,\n  watchUptime: 99,\n  criticalProbability: 0.80,\n  highProbability: 0.60,\n  watchProbability: 0.40,\n  highOutages: 20,\n  watchOutages: 10,\n  highDowntime: 500,\n  watchDowntime: 240\n};\n\nfunction toNumber(value) {\n  if (\n    value === null ||\n    value === undefined ||\n    String(value).trim() === \"\"\n  ) return null;\n\n  const n = Number(value);\n  return Number.isFinite(n) ? n : null;\n}\n\nreturn items.filter(item => item.json.is_valid === true).map(item => {\n  const r = item.json;\n\n  const uptime = toNumber(r.latest_uptime);\n  const outages = toNumber(\n    r.historical_total_outage_count\n  );\n  const downtime = toNumber(\n    r.historical_total_downtime_minutes\n  );\n  const probability = toNumber(\n    r.predicted_risk_probability\n  );\n\n  const signals = [];\n  const warnings = [];\n\n  // Validate metric ranges\n  if (uptime === null || uptime < 0 || uptime > 100) {\n    warnings.push(\"Invalid or missing uptime\");\n  }\n  if (outages === null || outages < 0) {\n    warnings.push(\"Invalid or missing outage count\");\n  }\n  if (downtime === null || downtime < 0) {\n    warnings.push(\"Invalid or missing downtime\");\n  }\n  if (\n    probability === null ||\n    probability < 0 ||\n    probability > 1\n  ) {\n    warnings.push(\"Invalid or missing probability\");\n  }\n\n  const u = uptime >= 0 && uptime <= 100\n    ? uptime : null;\n  const o = outages >= 0 ? outages : null;\n  const d = downtime >= 0 ? downtime : null;\n  const p = probability >= 0 && probability <= 1\n    ? probability : null;\n\n  // Interpret historical network performance\n  if (u !== null && u < T.watchUptime) {\n    signals.push(\"Reduced historical uptime\");\n  }\n  if (o !== null && o >= T.watchOutages) {\n    signals.push(\"Elevated historical outage count\");\n  }\n  if (d !== null && d >= T.watchDowntime) {\n    signals.push(\"Elevated historical downtime\");\n  }\n  if (p !== null && p >= T.watchProbability) {\n    signals.push(\"Elevated model risk probability\");\n  }\n\n  // Transparent operational triage rules\n  let riskLevel = \"LOW\";\n\n  if (\n    u === null &&\n    o === null &&\n    d === null &&\n    p === null\n  ) {\n    riskLevel = \"INSUFFICIENT_DATA\";\n  } else if (\n    (u !== null && u < T.criticalUptime) ||\n    (\n      p !== null &&\n      p >= T.criticalProbability &&\n      o !== null &&\n      o >= T.highOutages\n    )\n  ) {\n    riskLevel = \"CRITICAL\";\n  } else if (\n    (u !== null && u < T.highUptime) ||\n    (p !== null && p >= T.highProbability) ||\n    (o !== null && o >= T.highOutages) ||\n    (d !== null && d >= T.highDowntime)\n  ) {\n    riskLevel = \"HIGH\";\n  } else if (\n    (u !== null && u < T.watchUptime) ||\n    (p !== null && p >= T.watchProbability) ||\n    (o !== null && o >= T.watchOutages) ||\n    (d !== null && d >= T.watchDowntime)\n  ) {\n    riskLevel = \"MEDIUM\";\n  }\n\n  const actionMap = {\n    CRITICAL: \"Urgent engineer review\",\n    HIGH: \"Priority network inspection\",\n    MEDIUM: \"Schedule preventive inspection\",\n    LOW: \"Routine monitoring\",\n    INSUFFICIENT_DATA: \"Verify performance metrics\"\n  };\n\n  const qualityStatus = r.is_valid === false\n    ? \"REQUIRES_DATA_QUALITY_REVIEW\"\n    : r.is_valid === true\n      ? \"PASSED_CONFIGURED_CHECKS\"\n      : \"NOT_VALIDATED\";\n\n  return {\n    json: {\n      ...r,\n      operational_risk_level: riskLevel,\n      recommended_action: actionMap[riskLevel],\n      operational_risk_signals: signals,\n      metric_warnings: warnings,\n      data_quality_status: qualityStatus,\n      active_outage_status: \"NOT_VERIFIED\",\n      assessment_type: \"HISTORICAL_AND_PREDICTIVE_TRIAGE\",\n      assessed_at: new Date().toISOString()\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -464
+      ],
+      "id": "d7e2601a-9bdd-43c0-8db5-c9f06007e4f9",
+      "name": "Assess Telecom Network Risk"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_network_risk_assessments"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "tower_id",
+              "keyValue": "={{ $json.tower_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tower_id": "={{ $json.tower_id }}",
+            "operator": "={{ $json.operator }}",
+            "state": "={{ $json.state }}",
+            "city": "={{ $json.city }}",
+            "latest_uptime": "={{ $json.latest_uptime }}",
+            "predicted_risk_probability": "={{ $json.predicted_risk_probability }}",
+            "operational_risk_level": "={{ $json.operational_risk_level }}",
+            "recommended_action": "={{ $json.recommended_action }}",
+            "operational_risk_signals": "={{ ($json.operational_risk_signals || []).join(\"; \") }}",
+            "data_quality_status": "={{ $json.data_quality_status }}",
+            "active_outage_status": "={{ $json.active_outage_status }}",
+            "assessed_at": "={{ $json.assessed_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "tower_id",
+              "displayName": "tower_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "operator",
+              "displayName": "operator",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "state",
+              "displayName": "state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "latest_uptime",
+              "displayName": "latest_uptime",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "predicted_risk_probability",
+              "displayName": "predicted_risk_probability",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "operational_risk_level",
+              "displayName": "operational_risk_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "recommended_action",
+              "displayName": "recommended_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "operational_risk_signals",
+              "displayName": "operational_risk_signals",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "data_quality_status",
+              "displayName": "data_quality_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "active_outage_status",
+              "displayName": "active_outage_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "assessed_at",
+              "displayName": "assessed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        848,
+        -464
+      ],
+      "id": "fb551de6-7695-44b6-9e46-3481abc49380",
+      "name": "Upsert row(s)1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3df430fb-eead-41fb-8bff-b2069f4f83f8",
+              "leftValue": "={{ [\"HIGH\", \"CRITICAL\"].includes($json.operational_risk_level) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        768,
+        -256
+      ],
+      "id": "4c556e57-63da-4726-be40-31fb60600dae",
+      "name": "Identify High-Risk Towers"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst towers = $input.all().map(item => item.json);\n\nconst critical = towers.filter(t =>\n  t.operational_risk_level === \"CRITICAL\"\n);\n\nconst high = towers.filter(t =>\n  t.operational_risk_level === \"HIGH\"\n);\n\nconst qualityReview = towers.filter(t =>\n  t.data_quality_status ===\n  \"REQUIRES_DATA_QUALITY_REVIEW\"\n);\n\nconst priority = { CRITICAL: 0, HIGH: 1 };\n\nconst sorted = [...towers].sort((a, b) =>\n  (priority[a.operational_risk_level] ?? 9) -\n  (priority[b.operational_risk_level] ?? 9)\n);\n\nconst lines = sorted.map((t, i) =>\n  `${i + 1}. Tower: ${t.tower_id}\nOperator: ${t.operator}\nRisk Level: ${t.operational_risk_level}\nUptime: ${t.latest_uptime}%\nRisk Probability: ${t.predicted_risk_probability}\nAction: ${t.recommended_action}\nData Quality: ${t.data_quality_status}`\n);\n\n\nconst alertSignature = JSON.stringify(\n  [...towers]\n    .sort((a, b) =>\n      String(a.tower_id).localeCompare(String(b.tower_id))\n    )\n    .map(t => ({\n      tower_id: t.tower_id,\n      risk_level: t.operational_risk_level,\n      probability: Number(\n        t.predicted_risk_probability ?? 0\n      ).toFixed(4),\n      quality: t.data_quality_status,\n      outage_status: t.active_outage_status\n    }))\n);\n\n\nconst report =\n`TELECOM NETWORK RISK REVIEW\n================================\n\nAssessment Type: Historical & Predictive\nConfirmed Live Outages: NOT VERIFIED\n\nTowers Requiring Review: ${towers.length}\nCritical Risk: ${critical.length}\nHigh Risk: ${high.length}\nData Quality Review Required: ${qualityReview.length}\n\nPRIORITY TOWER WATCHLIST\n================================\n\n${lines.join(\"\\n\\n\")}\n\nRECOMMENDED RESPONSE\n================================\n1. Verify flagged geographic data.\n2. Review critical-risk towers first.\n3. Investigate historical outage patterns.\n4. Schedule preventive maintenance.\n5. Confirm current network status using live telemetry.\n\nGenerated: ${new Date().toISOString()}\n`;\n\nreturn [{\n  json: {\n    alert_key: \"TELECOM_RISK_REVIEW\",\n    alert_signature: alertSignature,\n    alert_type: \"RISK_REVIEW_REQUIRED\",\n    total_priority_towers: towers.length,\n    critical_count: critical.length,\n    high_count: high.length,\n    quality_review_count: qualityReview.length,\n    alert_subject: \"Telecom Network Risk Review\",\n    alert_message: report,\n    generated_at: new Date().toISOString()\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        -320
+      ],
+      "id": "430ce6d3-4cee-463c-aa62-4b17fd2b5d6b",
+      "name": "Generate Network Risk Alert"
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_ALERT_EMAIL@example.com",
+        "subject": "={{ '[TEST] ' + $json.alert_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.alert_message }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1488,
+        -320
+      ],
+      "id": "b7a05367-6f0b-43a3-ac6b-9cddd6015521",
+      "name": "Send a message"
+    },
+    {
+      "parameters": {
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_alert_delivery_log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "alert_key",
+              "keyValue": "={{ $json.alert_key }}"
+            },
+            {
+              "keyName": "alert_signature",
+              "keyValue": "={{ $json.alert_signature }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1264,
+        -320
+      ],
+      "id": "403ec4e5-6361-45fc-841f-d68e5a552d94",
+      "name": "If row does not exist"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_alert_delivery_log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "alert_key": "={{ $('Generate Network Risk Alert').first().json.alert_key }}",
+            "alert_signature": "={{ $('Generate Network Risk Alert').first().json.alert_signature }}",
+            "last_sent_at": "={{ $now.toISO() }}",
+            "gmail_message_id": "={{ $json.id }}",
+            "delivery_status": "SENT"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "alert_key",
+              "displayName": "alert_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "alert_signature",
+              "displayName": "alert_signature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "last_sent_at",
+              "displayName": "last_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "gmail_message_id",
+              "displayName": "gmail_message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "delivery_status",
+              "displayName": "delivery_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1712,
+        -320
+      ],
+      "id": "12f32df0-07f2-45f4-894b-285fcb0db34f",
+      "name": "Insert row"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -48,
+        -672
+      ],
+      "id": "cedd09d6-00c1-4f09-82d0-87c158fd6428",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\n// Reference locations for the synthetic telecom dataset\nconst cityStateMap = {\n  \"kano\": \"Kano\",\n  \"abuja\": \"FCT\",\n  \"abeokuta\": \"Ogun\",\n  \"ibadan\": \"Oyo\",\n  \"benin city\": \"Edo\",\n  \"calabar\": \"Cross River\",\n  \"jos\": \"Plateau\"\n};\n\nfunction normalize(value) {\n  return String(value ?? \"\")\n    .trim()\n    .replace(/\\s+/g, \" \")\n    .toLowerCase();\n}\n\nreturn items.map(item => {\n  const row = { ...item.json };\n\n  const city = normalize(row.city);\n  const originalState = row.state ?? null;\n  const currentState = normalize(originalState);\n\n  const expectedState = cityStateMap[city];\n\n  let status = \"REFERENCE_REVIEW_REQUIRED\";\n  let corrected = false;\n\n  if (expectedState) {\n    const allowedStates = city === \"abuja\"\n      ? [\"fct\", \"federal capital territory\"]\n      : [normalize(expectedState)];\n\n    if (!allowedStates.includes(currentState)) {\n      row.state = expectedState;\n      corrected = true;\n      status = \"CORRECTED_ASSUMED_FROM_CITY\";\n    } else {\n      status = \"ALREADY_CONSISTENT\";\n    }\n  }\n\n  return {\n    json: {\n      ...row,\n      original_state: originalState,\n      geography_corrected: corrected,\n      geography_normalization_status: status,\n      geography_reference: \"SYNTHETIC_CITY_STATE_MAP\",\n      geography_checked_at: new Date().toISOString()\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        -240
+      ],
+      "id": "e255b645-d1bd-4ac3-900c-4398098dffcd",
+      "name": "Normalize Telecom Geographic Data."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_batch_progress"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "batch_key",
+              "keyValue": "TELECOM_NETWORK"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        -656
+      ],
+      "id": "17b2abd6-f00a-4e1d-a7e2-7b274bed2abf",
+      "name": "Get Batch Progress."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1088,
+        -656
+      ],
+      "id": "7c42c890-2173-4522-8cfb-7f1a3c64ba23",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst source = $(\"Get row(s)\").all().map(i => i.json);\nconst completed = $input.all().map(i => i.json);\n\nif (!source.length || source.length !== completed.length) {\n  throw new Error(\"Batch incomplete: checkpoint blocked\");\n}\n\nfunction towerCounts(rows) {\n  const counts = new Map();\n  for (const row of rows) {\n    const key = String(row.tower_id ?? \"\").trim();\n    if (!key) throw new Error(\"Missing tower_id\");\n    counts.set(key, (counts.get(key) ?? 0) + 1);\n  }\n  return counts;\n}\n\nconst expected = towerCounts(source);\nconst actual = towerCounts(completed);\n\nfor (const [tower, count] of expected) {\n  if (actual.get(tower) !== count) {\n    throw new Error(`Missing or mismatched tower: ${tower}`);\n  }\n}\n\nconst ids = source.map(r => Number(r.id));\n\nif (ids.some(id => !Number.isSafeInteger(id) || id <= 0)) {\n  throw new Error(\"Invalid source row ID\");\n}\n\nreturn [{\n  json: {\n    batch_key: \"TELECOM_NETWORK\",\n    last_processed_id: Math.max(...ids),\n    processed_count: completed.length,\n    checkpoint_status: \"READY_FOR_REVIEW\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -656
+      ],
+      "id": "2b073b45-290c-4fe3-9da4-b72f68055918",
+      "name": "Calculate Batch Progress."
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "telecom_batch_progress"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "batch_key",
+              "keyValue": "={{ $json.batch_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batch_key": "={{ $json.batch_key }}",
+            "last_processed_id": "={{ $json.last_processed_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "batch_key",
+              "displayName": "batch_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "last_processed_id",
+              "displayName": "last_processed_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1536,
+        -656
+      ],
+      "id": "efd46eed-0f0b-4c4b-abb2-35a4202edcdf",
+      "name": "Update Batch Progress."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get Batch Progress.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Telecom Geographic Data.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Assess Telecom Network Risk",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Telecom Network Risk": {
+      "main": [
+        [
+          {
+            "node": "Upsert row(s)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert row(s)1": {
+      "main": [
+        [
+          {
+            "node": "Identify High-Risk Towers",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Identify High-Risk Towers": {
+      "main": [
+        [
+          {
+            "node": "Generate Network Risk Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Network Risk Alert": {
+      "main": [
+        [
+          {
+            "node": "If row does not exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If row does not exist": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Insert row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Batch Progress.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Telecom Geographic Data.": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Batch Progress.": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert row(s)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Calculate Batch Progress.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Batch Progress.": {
+      "main": [
+        [
+          {
+            "node": "Update Batch Progress.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Africa/Lagos",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}
